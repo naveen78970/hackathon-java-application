@@ -16,8 +16,7 @@ spec:
     spec:
       containers:
         - name: devops-app
-          # Replace with your AWS Account ID and image tag
-          image: 861358180398.dkr.ecr.us-east-1.amazonaws.com/app-repository:latest
+          image: IMAGE_PLACEHOLDER
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
