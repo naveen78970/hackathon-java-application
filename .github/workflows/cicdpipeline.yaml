@@ -1,0 +1,86 @@
+name: Java CI-CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+ 
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: my-app-repo
+  EKS_CLUSTER_NAME: project-eks-cluster
+
+jobs:
+  ci-cd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Build Application
+        run: mvn clean install
+
+      - name: SonarQube Scan
+        run: |
+          mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+            -Dsonar.projectKey=my-java-app \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest .
+
+      - name: Scan Image using Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+      - name: Push Image to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Replace IMAGE placeholder
+        run: |
+          IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest"
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
+
+      - name: Deploy to EKS
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+
+      - name: Verify Deployment
+        run: |
+          kubectl get pods
+          kubectl get svc
+          kubectl rollout status deployment/devops-app-deployment
